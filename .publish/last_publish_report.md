@@ -1,12 +1,9 @@
 # Publish Report
 
-- Date: 2026-05-13 18:14:16
-- Version: v0.2.1
+- Date: 2026-05-13 18:15:07
+- Version: v0.2.2
 - Commit message: feat(card): publish blaze-app-card
 
 ## Changed files
 
-- .gitignore
-- README.md
-- blaze-app-card.js
 - hacs.json
