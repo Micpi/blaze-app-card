@@ -5,6 +5,7 @@ class BlazeAppCard extends HTMLElement {
     this._config = {
       title: "Blaze Control Center",
       entity_prefix: "blaze_powerzone",
+      blaze_device_filter: "",
       entry_id: "",
       show_raw_panel: true,
       show_overview: true,
@@ -57,6 +58,7 @@ class BlazeAppCard extends HTMLElement {
       type: "custom:blaze-app-card",
       title: "Blaze Control Center",
       entity_prefix: "blaze_powerzone",
+      blaze_device_filter: "",
       show_raw_panel: true,
       show_overview: true,
       show_controls: true,
@@ -121,6 +123,79 @@ class BlazeAppCard extends HTMLElement {
       .filter(Boolean)
   }
 
+  _entitySlug(entityId) {
+    return (
+      String(entityId || "")
+        .toLowerCase()
+        .split(".")[1] || ""
+    )
+  }
+
+  _deriveDeviceKey(entityId, stateObj) {
+    const slug = this._entitySlug(entityId)
+    const tokens = slug.split("_").filter(Boolean)
+    if (!tokens.length) return ""
+
+    const stopTokens = new Set([
+      "system",
+      "signal",
+      "api",
+      "firmware",
+      "serial",
+      "mac",
+      "lan",
+      "wifi",
+      "device",
+      "zone",
+      "out",
+      "output",
+      "in",
+      "input",
+      "generator",
+      "setup",
+      "power",
+      "gain",
+      "mute",
+      "duck",
+      "compressor",
+      "eq",
+      "crossover",
+      "limiter",
+      "state",
+      "status",
+      "name",
+    ])
+
+    const stopIndex = tokens.findIndex((token) => stopTokens.has(token))
+    if (stopIndex > 0) {
+      return tokens.slice(0, stopIndex).join("_")
+    }
+
+    const manufacturer = (stateObj?.attributes?.manufacturer || "").toLowerCase()
+    if (manufacturer.includes("blaze") && tokens.length >= 2) {
+      return tokens.slice(0, 2).join("_")
+    }
+
+    return tokens[0]
+  }
+
+  _matchesSelectedDevice(entityId, stateObj) {
+    const selected = String(this._config?.blaze_device_filter || "")
+      .trim()
+      .toLowerCase()
+    if (!selected) return true
+
+    const deviceKey = this._deriveDeviceKey(entityId, stateObj)
+    if (deviceKey && deviceKey === selected) return true
+
+    const slug = this._entitySlug(entityId)
+    return (
+      slug.startsWith(`${selected}_`) ||
+      slug.includes(`_${selected}_`) ||
+      slug.endsWith(`_${selected}`)
+    )
+  }
+
   _looksLikeBlazeEntity(entityId, stateObj) {
     const hintKeywords = [
       "blaze",
@@ -164,12 +239,23 @@ class BlazeAppCard extends HTMLElement {
     if (prefixes.some((prefix) => lowerId.includes(prefix))) {
       return true
     }
+    if (prefixes.some((prefix) => lowerId.includes(prefix))) {
+      return this._matchesSelectedDevice(entityId, stateObj)
+    }
 
     if (manufacturer.includes("blaze") || attribution.includes("blaze")) {
-      return true
+      return this._matchesSelectedDevice(entityId, stateObj)
     }
 
     return false
+  }
+
+  _matchesBlazeEntityFallback(entityId, stateObj) {
+    if (!this._looksLikeBlazeEntity(entityId, stateObj)) {
+      return false
+    }
+
+    return this._matchesSelectedDevice(entityId, stateObj)
   }
 
   _collectEntities() {
@@ -202,7 +288,7 @@ class BlazeAppCard extends HTMLElement {
 
     if (strictCount === 0) {
       for (const [entityId, stateObj] of candidates) {
-        if (!this._looksLikeBlazeEntity(entityId, stateObj)) {
+        if (!this._matchesBlazeEntityFallback(entityId, stateObj)) {
           continue
         }
 
@@ -1004,12 +1090,14 @@ class BlazeAppCardEditor extends HTMLElement {
     super()
     this.attachShadow({ mode: "open" })
     this._config = {}
+    this._hass = null
   }
 
   setConfig(config) {
     this._config = {
       title: "Blaze Control Center",
       entity_prefix: "blaze_powerzone",
+      blaze_device_filter: "",
       entry_id: "",
       show_raw_panel: true,
       show_overview: true,
@@ -1029,6 +1117,85 @@ class BlazeAppCardEditor extends HTMLElement {
     this._render()
   }
 
+  set hass(hass) {
+    this._hass = hass
+    this._render()
+  }
+
+  _editorEntityHaystack(entityId, stateObj) {
+    const name = stateObj?.attributes?.friendly_name || ""
+    const manufacturer = stateObj?.attributes?.manufacturer || ""
+    const attribution = stateObj?.attributes?.attribution || ""
+    return `${entityId} ${name} ${manufacturer} ${attribution}`.toLowerCase()
+  }
+
+  _looksLikeBlazeInEditor(entityId, stateObj) {
+    const haystack = this._editorEntityHaystack(entityId, stateObj)
+    const hints = [
+      "blaze",
+      "powerzone",
+      "zone",
+      "output",
+      "input",
+      "signal",
+      "firmware",
+      "api_version",
+      "duck",
+      "compressor",
+    ]
+    return hints.some((hint) => haystack.includes(hint))
+  }
+
+  _deriveDeviceKeyFromId(entityId) {
+    const slug =
+      String(entityId || "")
+        .toLowerCase()
+        .split(".")[1] || ""
+    const tokens = slug.split("_").filter(Boolean)
+    if (!tokens.length) return ""
+
+    const stopTokens = new Set([
+      "system",
+      "signal",
+      "api",
+      "firmware",
+      "serial",
+      "lan",
+      "wifi",
+      "zone",
+      "out",
+      "output",
+      "in",
+      "input",
+      "power",
+      "gain",
+      "mute",
+      "name",
+      "status",
+    ])
+    const idx = tokens.findIndex((token) => stopTokens.has(token))
+    if (idx > 0) return tokens.slice(0, idx).join("_")
+    return tokens[0]
+  }
+
+  _buildDeviceOptions() {
+    if (!this._hass) return []
+
+    const buckets = new Map()
+    for (const [entityId, stateObj] of Object.entries(this._hass.states)) {
+      if (!this._looksLikeBlazeInEditor(entityId, stateObj)) continue
+      const key = this._deriveDeviceKeyFromId(entityId)
+      if (!key) continue
+      const current = buckets.get(key) || { count: 0 }
+      current.count += 1
+      buckets.set(key, current)
+    }
+
+    return Array.from(buckets.entries())
+      .sort((a, b) => b[1].count - a[1].count)
+      .map(([key, data]) => ({ value: key, label: `${key} (${data.count} entites)` }))
+  }
+
   _emitConfig() {
     this.dispatchEvent(
       new CustomEvent("config-changed", {
@@ -1046,6 +1213,9 @@ class BlazeAppCardEditor extends HTMLElement {
   }
 
   _render() {
+    const deviceOptions = this._buildDeviceOptions()
+    const selectedDevice = this._config.blaze_device_filter || ""
+
     this.shadowRoot.innerHTML = `
       <style>
         :host { display: block; font-family: "Segoe UI", sans-serif; }
@@ -1080,7 +1250,18 @@ class BlazeAppCardEditor extends HTMLElement {
             <label>Titre</label>
             <input type="text" data-key="title" value="${this._config.title || ""}">
 
-            <label>Prefix entites</label>
+            <label>Ampli Blaze cible</label>
+            <select data-key="blaze_device_filter" data-kind="string">
+              <option value="" ${!selectedDevice ? "selected" : ""}>Auto (tous les amplis detectes)</option>
+              ${deviceOptions
+                .map(
+                  (opt) =>
+                    `<option value="${opt.value}" ${selectedDevice === opt.value ? "selected" : ""}>${opt.label}</option>`
+                )
+                .join("")}
+            </select>
+
+            <label>Prefix entites (avance)</label>
             <input type="text" data-key="entity_prefix" value="${this._config.entity_prefix || "blaze_powerzone"}">
           </div>
         </details>
@@ -1167,6 +1348,10 @@ class BlazeAppCardEditor extends HTMLElement {
 
     this.shadowRoot.querySelectorAll("select[data-key]").forEach((select) => {
       select.addEventListener("change", () => {
+        if (select.dataset.kind === "string") {
+          this._setValue(select.dataset.key, select.value)
+          return
+        }
         this._setValue(select.dataset.key, select.value === "true")
       })
     })
