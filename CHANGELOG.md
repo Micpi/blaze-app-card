@@ -51,4 +51,11 @@ Toutes les evolutions sont listees ici avec un focus strict utilisateur.
 - changed: blaze-app-card.js
 - changed: hacs.json
 
+## v0.2.4 - 2026-05-13
+
+- feat(card): publish blaze-app-card
+- changed: CHANGELOG.md
+- changed: blaze-app-card.js
+- changed: hacs.json
+
 

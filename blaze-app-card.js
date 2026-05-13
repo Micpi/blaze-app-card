@@ -15,8 +15,10 @@ class BlazeAppCard extends HTMLElement {
       show_api: true,
       core_switch_keywords: "power,mute,protection,standby,enable,bridge",
       primary_number_keywords: "volume,gain,level,master,trim",
-      signal_sensor_keywords: "signal,rssi,snr,quality,level,input,output,clip,temperature,temp,voltage,current,power,latency",
-      dsp_keywords: "dsp,eq,equalizer,crossover,xo,delay,phase,polarity,filter,limiter,compressor,preset,profile,routing,matrix",
+      signal_sensor_keywords:
+        "signal,rssi,snr,quality,level,input,output,clip,temperature,temp,voltage,current,power,latency",
+      dsp_keywords:
+        "dsp,eq,equalizer,crossover,xo,delay,phase,polarity,filter,limiter,compressor,preset,profile,routing,matrix",
     }
     this._hass = null
     this._activeTab = "overview"
@@ -111,12 +113,63 @@ class BlazeAppCard extends HTMLElement {
     return items.filter(([entityId, stateObj]) => this._hasAnyKeyword(entityId, stateObj, keywords))
   }
 
+  _getConfiguredPrefixes() {
+    const raw = this._config.entity_prefix || "blaze_powerzone"
+    return String(raw)
+      .split(",")
+      .map((part) => part.trim().toLowerCase())
+      .filter(Boolean)
+  }
+
+  _looksLikeBlazeEntity(entityId, stateObj) {
+    const hintKeywords = [
+      "blaze",
+      "powerzone",
+      "api_version",
+      "system state",
+      "signal in",
+      "signal out",
+      "zone ",
+      "output ",
+      "input ",
+      "mute",
+      "gain",
+      "duck",
+      "compressor",
+      "crossover",
+      "limiter",
+      "equalizer",
+      " eq",
+      " hpf",
+      " lpf",
+      "firmware",
+      "serial",
+      "lan ip",
+      "wifi ip",
+    ]
+
+    const haystack = this._entityHaystack(entityId, stateObj)
+    const attribution = String(stateObj?.attributes?.attribution || "").toLowerCase()
+    return (
+      hintKeywords.some((keyword) => haystack.includes(keyword)) || attribution.includes("blaze")
+    )
+  }
+
   _matchesBlazeEntity(entityId, stateObj) {
-    const prefix = (this._config.entity_prefix || "blaze_powerzone").toLowerCase()
+    const prefixes = this._getConfiguredPrefixes()
     const lowerId = entityId.toLowerCase()
     const manufacturer = (stateObj?.attributes?.manufacturer || "").toLowerCase()
+    const attribution = (stateObj?.attributes?.attribution || "").toLowerCase()
 
-    return lowerId.includes(prefix) || manufacturer.includes("blaze")
+    if (prefixes.some((prefix) => lowerId.includes(prefix))) {
+      return true
+    }
+
+    if (manufacturer.includes("blaze") || attribution.includes("blaze")) {
+      return true
+    }
+
+    return false
   }
 
   _collectEntities() {
@@ -126,7 +179,9 @@ class BlazeAppCard extends HTMLElement {
 
     const result = { sensors: [], numbers: [], selects: [], switches: [], buttons: [] }
 
-    for (const [entityId, stateObj] of Object.entries(this._hass.states)) {
+    const candidates = Object.entries(this._hass.states)
+
+    for (const [entityId, stateObj] of candidates) {
       if (!this._matchesBlazeEntity(entityId, stateObj)) {
         continue
       }
@@ -136,6 +191,27 @@ class BlazeAppCard extends HTMLElement {
       if (entityId.startsWith("select.")) result.selects.push([entityId, stateObj])
       if (entityId.startsWith("switch.")) result.switches.push([entityId, stateObj])
       if (entityId.startsWith("button.")) result.buttons.push([entityId, stateObj])
+    }
+
+    const strictCount =
+      result.sensors.length +
+      result.numbers.length +
+      result.selects.length +
+      result.switches.length +
+      result.buttons.length
+
+    if (strictCount === 0) {
+      for (const [entityId, stateObj] of candidates) {
+        if (!this._looksLikeBlazeEntity(entityId, stateObj)) {
+          continue
+        }
+
+        if (entityId.startsWith("sensor.")) result.sensors.push([entityId, stateObj])
+        if (entityId.startsWith("number.")) result.numbers.push([entityId, stateObj])
+        if (entityId.startsWith("select.")) result.selects.push([entityId, stateObj])
+        if (entityId.startsWith("switch.")) result.switches.push([entityId, stateObj])
+        if (entityId.startsWith("button.")) result.buttons.push([entityId, stateObj])
+      }
     }
 
     const sortByName = (a, b) => {
@@ -372,25 +448,29 @@ class BlazeAppCard extends HTMLElement {
         <article class="panel">
           <h3>Etat Systeme</h3>
           <div class="kv-list">
-            ${systemSensors
-              .map(
-                ([entityId, st]) =>
-                  `<div class="kv"><span>${this._escapeHtml(this._getName(entityId, st))}</span><strong>${this._escapeHtml(st.state)}</strong></div>`
-              )
-              .join("") || '<p class="hint">Aucun capteur systeme detecte.</p>'}
+            ${
+              systemSensors
+                .map(
+                  ([entityId, st]) =>
+                    `<div class="kv"><span>${this._escapeHtml(this._getName(entityId, st))}</span><strong>${this._escapeHtml(st.state)}</strong></div>`
+                )
+                .join("") || '<p class="hint">Aucun capteur systeme detecte.</p>'
+            }
           </div>
         </article>
 
         <article class="panel">
           <h3>Actions Rapides</h3>
           <div class="actions">
-            ${entities.buttons
-              .slice(0, 10)
-              .map(
-                ([entityId, st]) =>
-                  `<button class="action" data-press="${entityId}">${this._escapeHtml(this._getName(entityId, st))}</button>`
-              )
-              .join("") || '<p class="hint">Aucun bouton expose par l integration.</p>'}
+            ${
+              entities.buttons
+                .slice(0, 10)
+                .map(
+                  ([entityId, st]) =>
+                    `<button class="action" data-press="${entityId}">${this._escapeHtml(this._getName(entityId, st))}</button>`
+                )
+                .join("") || '<p class="hint">Aucun bouton expose par l integration.</p>'
+            }
           </div>
         </article>
 
@@ -442,22 +522,28 @@ class BlazeAppCard extends HTMLElement {
     ])
 
     const coreSwitches = this._pickByKeywords(entities.switches, coreSwitchKeywords)
-    const additionalSwitches = entities.switches.filter(([entityId]) => !coreSwitches.some(([id]) => id === entityId))
+    const additionalSwitches = entities.switches.filter(
+      ([entityId]) => !coreSwitches.some(([id]) => id === entityId)
+    )
 
     const levelNumbers = this._pickByKeywords(entities.numbers, primaryKeywords)
-    const additionalNumbers = entities.numbers.filter(([entityId]) => !levelNumbers.some(([id]) => id === entityId))
+    const additionalNumbers = entities.numbers.filter(
+      ([entityId]) => !levelNumbers.some(([id]) => id === entityId)
+    )
 
     return `
       <section class="stack">
         <article class="panel">
           <h3>Power / Routing Buttons</h3>
           <div class="switch-pills">
-            ${coreSwitches
-              .map(([entityId, st]) => {
-                const isOn = st.state === "on"
-                return `<button class="pill ${isOn ? "is-on" : ""}" data-toggle-btn="${entityId}">${this._escapeHtml(this._getName(entityId, st))}: ${isOn ? "ON" : "OFF"}</button>`
-              })
-              .join("") || '<p class="hint">Aucun switch principal detecte.</p>'}
+            ${
+              coreSwitches
+                .map(([entityId, st]) => {
+                  const isOn = st.state === "on"
+                  return `<button class="pill ${isOn ? "is-on" : ""}" data-toggle-btn="${entityId}">${this._escapeHtml(this._getName(entityId, st))}: ${isOn ? "ON" : "OFF"}</button>`
+                })
+                .join("") || '<p class="hint">Aucun switch principal detecte.</p>'
+            }
           </div>
         </article>
 
@@ -469,17 +555,19 @@ class BlazeAppCard extends HTMLElement {
         <article class="panel">
           <h3>Switches Avances</h3>
           <div class="rows">
-            ${additionalSwitches
-              .map(([entityId, st]) => {
-                const isOn = st.state === "on"
-                return `
+            ${
+              additionalSwitches
+                .map(([entityId, st]) => {
+                  const isOn = st.state === "on"
+                  return `
                   <label class="row">
                     <span>${this._escapeHtml(this._getName(entityId, st))}</span>
                     <input type="checkbox" data-toggle="${entityId}" ${isOn ? "checked" : ""}>
                   </label>
                 `
-              })
-              .join("") || '<p class="hint">Aucun switch avance detecte.</p>'}
+                })
+                .join("") || '<p class="hint">Aucun switch avance detecte.</p>'
+            }
           </div>
         </article>
 
@@ -525,12 +613,14 @@ class BlazeAppCard extends HTMLElement {
         <article class="panel">
           <h3>DSP Presets / Actions</h3>
           <div class="actions">
-            ${dspButtons
-              .map(
-                ([entityId, st]) =>
-                  `<button class="action" data-press="${entityId}">${this._escapeHtml(this._getName(entityId, st))}</button>`
-              )
-              .join("") || '<p class="hint">Aucun bouton DSP detecte.</p>'}
+            ${
+              dspButtons
+                .map(
+                  ([entityId, st]) =>
+                    `<button class="action" data-press="${entityId}">${this._escapeHtml(this._getName(entityId, st))}</button>`
+                )
+                .join("") || '<p class="hint">Aucun bouton DSP detecte.</p>'
+            }
           </div>
         </article>
 
@@ -547,17 +637,19 @@ class BlazeAppCard extends HTMLElement {
         <article class="panel">
           <h3>DSP Switches</h3>
           <div class="rows">
-            ${dspSwitches
-              .map(([entityId, st]) => {
-                const isOn = st.state === "on"
-                return `
+            ${
+              dspSwitches
+                .map(([entityId, st]) => {
+                  const isOn = st.state === "on"
+                  return `
                   <label class="row">
                     <span>${this._escapeHtml(this._getName(entityId, st))}</span>
                     <input type="checkbox" data-toggle="${entityId}" ${isOn ? "checked" : ""}>
                   </label>
                 `
-              })
-              .join("") || '<p class="hint">Aucun switch DSP detecte.</p>'}
+                })
+                .join("") || '<p class="hint">Aucun switch DSP detecte.</p>'
+            }
           </div>
         </article>
       </section>
@@ -601,12 +693,14 @@ class BlazeAppCard extends HTMLElement {
           <h3>Etat Detaille</h3>
           <div class="table">
             <div class="thead"><span>Capteur</span><span>Valeur</span></div>
-            ${signalSensors
-              .map(
-                ([entityId, st]) =>
-                  `<div class="tr"><span>${this._escapeHtml(this._getName(entityId, st))}</span><strong>${this._formatSensorValue(st)}</strong></div>`
-              )
-              .join("") || '<div class="tr"><span>-</span><strong>-</strong></div>'}
+            ${
+              signalSensors
+                .map(
+                  ([entityId, st]) =>
+                    `<div class="tr"><span>${this._escapeHtml(this._getName(entityId, st))}</span><strong>${this._formatSensorValue(st)}</strong></div>`
+                )
+                .join("") || '<div class="tr"><span>-</span><strong>-</strong></div>'
+            }
           </div>
         </article>
       </section>
@@ -926,8 +1020,10 @@ class BlazeAppCardEditor extends HTMLElement {
       show_api: true,
       core_switch_keywords: "power,mute,protection,standby,enable,bridge",
       primary_number_keywords: "volume,gain,level,master,trim",
-      signal_sensor_keywords: "signal,rssi,snr,quality,level,input,output,clip,temperature,temp,voltage,current,power,latency",
-      dsp_keywords: "dsp,eq,equalizer,crossover,xo,delay,phase,polarity,filter,limiter,compressor,preset,profile,routing,matrix",
+      signal_sensor_keywords:
+        "signal,rssi,snr,quality,level,input,output,clip,temperature,temp,voltage,current,power,latency",
+      dsp_keywords:
+        "dsp,eq,equalizer,crossover,xo,delay,phase,polarity,filter,limiter,compressor,preset,profile,routing,matrix",
       ...config,
     }
     this._render()
